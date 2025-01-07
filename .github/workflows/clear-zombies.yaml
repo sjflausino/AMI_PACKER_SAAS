@@ -1,0 +1,58 @@
+name: Cleanup Temporary EC2 Instances
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 21 * * 1-5'
+
+env:
+  AWS_ROLE_ARN: "arn:aws:iam::829720130733:role/Github_Action_IDP"
+  AWS_REGION: "us-east-1"
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  cleanup-ec2:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Configure AWS credentials from AssumeRole
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        role-to-assume: ${{ env.AWS_ROLE_ARN }}
+        aws-region: ${{ env.AWS_REGION }}
+
+    - name: List and delete EC2 instances
+      run: |
+        # List all running EC2 instances with the key-pair and security group name starting with "packer_"
+        instances=$(aws ec2 describe-instances --filters "Name=key-name,Values=packer_*" "Name=instance-state-name,Values=running" "Name=instance.group-name,Values=packer_*" --query "Reservations[*].Instances[*].{InstanceId:InstanceId,LaunchTime:LaunchTime}" --output json | jq -c '.[] | .[]')
+        
+        # If no instances are found, exit the script
+        if [ -z "${instances}" ]; then
+          echo "No instances found for packer build."
+          exit 0
+        fi
+
+        # Get the current time in ISO 8601 format
+        current_time=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+        # Loop through each instance and check if it has been running for more than one hour
+        for instance in $instances; do
+          instance_id=$(echo "${instance}" | jq -r '.InstanceId')
+          launch_time=$(echo "${instance}" | jq -r '.LaunchTime')
+
+          # Calculate the time difference in seconds
+          time_diff=$(($(date -d "${current_time}" +%s) - $(date -d "${launch_time}" +%s)))
+          
+          echo "Instance ${instance_id} has been running for ${time_diff} seconds."
+          # If the instance has been running for more than one hour (3600 seconds), terminate it
+          if [ ${time_diff} -gt 3600 ]; then
+            echo "Terminating instance ${instance_id} which has been running for more than one hour."
+            aws ec2 terminate-instances --instance-ids ${instance_id}
+          fi
+        done

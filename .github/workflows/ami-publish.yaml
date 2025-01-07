@@ -1,0 +1,105 @@
+name: Packer AMI Builder
+
+on:
+  workflow_dispatch:
+    inputs:
+      devportal_chart_version:
+        description: 'Devportal chart version'
+      admin_ui_chart_version:
+        description: 'Admin UI chart version'
+      product_id:
+        description: 'Product ID in AWS Marketplace'
+
+env:
+  PACKER_VERSION: "1.11.2"
+  AWS_ROLE_ARN: "arn:aws:iam::829720130733:role/Github_Action_IDP"
+  AWS_REGION: "us-east-1"
+  ADMIN_UI_VERSION: ""
+  DEVPORTAL_VERSION: ""
+  AMI_ARN: ""
+  OS_VERSION: ""
+  PRODUCT_ID: ""
+  BACKSTAGE_VERSION: ""
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Getting versions
+      id: get-versions
+      run: |
+        if [ -z "${{ github.event.inputs.admin_ui_chart_version }}" ]; then
+          ADMIN_UI_VERSION=$(curl -s https://artifacthub.io/api/v1/packages/helm/veecode-platform/devportal-admin-ui | jq -r '.available_versions | max | .version')
+        else
+          if [ $(curl -s https://artifacthub.io/api/v1/packages/helm/veecode-platform/devportal | jq -r "any(.available_versions[]; .version==\"${{ github.event.inputs.admin_ui_chart_version }}\")") == "true" ]; then
+            ADMIN_UI_VERSION=${{ github.event.inputs.admin_ui_chart_version }}
+          else 
+            echo "Admin UI Version ${{ github.event.inputs.admin_ui_chart_version }} not found."
+            exit 1
+          fi
+        fi
+
+        if [ -z "${{ github.event.inputs.devportal_chart_version }}" ]; then
+          DEVPORTAL_VERSION=$(curl -s https://artifacthub.io/api/v1/packages/helm/veecode-platform/devportal | jq -r '.available_versions | max | .version')
+        else
+          if [ $(curl -s https://artifacthub.io/api/v1/packages/helm/veecode-platform/devportal | jq -r "any(.available_versions[]; .version==\"${{ github.event.inputs.devportal_chart_version }}\")") == "true" ]; then
+            DEVPORTAL_VERSION=${{ github.event.inputs.devportal_chart_version }}
+          else 
+            echo "Devportal Version ${{ github.event.inputs.devportal_chart_version }} not found."
+            exit 1
+          fi
+        fi
+        BACKSTAGE_VERSION=$(curl -s https://raw.githubusercontent.com/veecode-platform/devportal/main/backstage.json | jq -r '.version')
+        echo "ADMIN_UI_VERSION=$(echo $ADMIN_UI_VERSION)" >> $GITHUB_ENV
+        echo "DEVPORTAL_VERSION=$(echo $DEVPORTAL_VERSION)" >> $GITHUB_ENV
+        echo "PRODUCT_ID=${{ github.event.inputs.product_id }}" >> $GITHUB_ENV
+    
+    - name: Show selected versions
+      run: |
+        echo "Building versions:"
+        echo "ADMIN_UI_VERSION: ${{ env.ADMIN_UI_VERSION }}"
+        echo "DEVPORTAL_VERSION: ${{ env.DEVPORTAL_VERSION }}"
+        echo "PRODUCT_ID: ${{ env.PRODUCT_ID }}"
+        echo "BACKSTAGE_VERSION: ${{ env.BACKSTAGE_VERSION }}"
+
+    - name: Setup Packer
+      uses: hashicorp/setup-packer@main
+      with:
+        version: ${{ env.PACKER_VERSION }}
+
+    - name: Packer Init
+      run: packer init .
+
+    - name: Validate Packer template
+      run: packer validate .
+
+    - name: Configure AWS credentials from AssumeRole
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        role-to-assume: ${{ env.AWS_ROLE_ARN }}
+        aws-region: ${{ env.AWS_REGION }}
+
+    - name: Build AMI
+      id: build-ami
+      run: | 
+        packer build -machine-readable \
+          -var 'aws_region=${{ env.AWS_REGION }}' \
+          -var 'devportal_chart_version=${{ env.DEVPORTAL_VERSION }}' \
+          -var 'admin_ui_chart_version=${{ env.ADMIN_UI_VERSION }}' . | tee ami-build.log
+        cat ami-build.log  # Adicionando esta linha para verificar o conteúdo do log
+        AMI_ARN=$(grep 'artifact,0,id' ami-build.log | cut -d, -f6 | cut -d: -f2)
+        OS_VERSION=$(grep 'OS_VERSION=' ami-build.log | cut -d= -f2)
+        echo "AMI_ARN=$AMI_ARN" >> $GITHUB_ENV
+        echo "OS_VERSION=$OS_VERSION" >> $GITHUB_ENV
+
+    - name: Show AMI ARN
+      run: |
+        echo "AMI: ${{ env.AMI_ARN }}"
