@@ -12,7 +12,7 @@ on:
 
 env:
   PACKER_VERSION: "1.11.2"
-  AWS_ROLE_ARN: "arn:aws:iam::829720130733:role/Github_Action_IDP"
+  AWS_ROLE_ARN: "arn:aws:iam::611895093229:role/veecode-saas-ami-packer"
   AWS_REGION: "us-east-1"
   ADMIN_UI_VERSION: ""
   DEVPORTAL_VERSION: ""

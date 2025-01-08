@@ -26,29 +26,9 @@ export KUBECONFIG=/home/ec2-user/.kube/config
 echo "export KUBECONFIG=/home/ec2-user/.kube/config" >> /home/ec2-user/.bashrc
 
 # Add Helm repositories
-helm repo add metallb https://metallb.github.io/metallb
 helm repo add kong https://charts.konghq.com
 helm repo add veecode-platform https://veecode-platform.github.io/public-charts/
 helm repo update
-
-# Wait for 5 seconds
-sleep 5
-
-# Install MetalLB
-helm upgrade --install metallb metallb/metallb --create-namespace -n metallb-system --wait
-
-# Apply MetalLB IPAddressPool
-cat <<EOF > metallb-ipaddresspool.yaml
-apiVersion: metallb.io/v1beta1
-kind: IPAddressPool
-metadata:
-  name: first-pool
-  namespace: metallb-system
-spec:
-  addresses:
-    - $EC2_PUBLIC_IP/32
-EOF
-kubectl apply -f metallb-ipaddresspool.yaml
 
 # Install Kong
 helm upgrade --install kong kong/kong --version 2.42.0 \
@@ -64,7 +44,7 @@ helm upgrade --install kong kong/kong --version 2.42.0 \
   --set proxy.type=LoadBalancer
 
 # Install DevPortal Admin UI
-helm upgrade --install devportal-admin-ui --wait --timeout 8m veecode-platform/devportal-admin-ui --version $ADMIN_UI_CHART_VERSION --create-namespace -n platform \
+helm upgrade --install devportal-admin-ui --wait --timeout 8m veecode-platform/devportal-admin-ui --version 0.5.0 --create-namespace -n platform \
   --set "serviceAccount.create=true" \
   --set "ingress.enabled=true" \
   --set "ingress.className=kong" \
@@ -102,12 +82,5 @@ helm upgrade platform-devportal --install --wait --timeout 10m veecode-platform/
   --set "ingress.host=" \
   --set "locations[0].type=url,locations[0].target=https://github.com/veecode-platform/demo-catalog/blob/main/catalog-info.yaml"
 
-
-# Get EC2 public IP
-TOKEN=$(curl -sX PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600")
-EC2_PUBLIC_IP=$(curl -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/public-ipv4)
-echo "IP_EC2 = $EC2_PUBLIC_IP"
-
 # Update kube config with EC2 public IP
 sed -i 's/certificate-authority-data:.*/insecure-skip-tls-verify: true/' /home/ec2-user/.kube/config
-sed -i "s/127.0.0.1/$EC2_PUBLIC_IP/" /home/ec2-user/.kube/config
